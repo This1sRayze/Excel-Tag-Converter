@@ -319,6 +319,10 @@ class ExcelTagConverter:
         # Check for CALCULATED type
         if 'position failure' in desc_lower or area_lower == 'diagnostics':
             return 'CALCULATED'
+        if 'setpoint' in desc_lower or area_lower == 'diagnostics':
+            return 'CALCULATED'
+        if '_sp' in desc_lower or area_lower == 'diagnostics':
+            return 'CALCULATED'
         
         # Check for COMM type
         comm_keywords_desc = ['deif', 'automaskin', 'mtu', 'consilium','nmea','modbus','gps']
@@ -340,7 +344,7 @@ class ExcelTagConverter:
             return 'ANALOG'
         
         # Check for DIGITAL
-        digital_keywords = ['dig_alr', 'dig_alr_wo_inh', 'pump', 'bilge', 'valve', 'int']
+        digital_keywords = ['dig_alr', 'dig_alr_wo_inh', 'pump', 'bilge', 'valve', 'int', 'bool']
         for keyword in digital_keywords:
             if keyword in udt_lower:
                 return 'DIGITAL'
@@ -695,8 +699,8 @@ class ExcelTagConverter:
                             current_row += area_count
                             area_color_idx += 1
 
-                        # Final SCADA sheet: DB, Scada Tag Path, Type, Signal Type, Data Type, Comments, Origin, Description
-                        final_cols = ['DB', 'Scada Tag Path', 'Type', 'Signal Type', 'Data Type', 'Comments', 'Origin', 'Description']
+                        # Final SCADA sheet: DB, Scada Tag Path, Data Type, Comments, Origin, Description
+                        final_cols = ['DB', 'Scada Tag Path', 'Data Type', 'Comments', 'Origin', 'Description']
                         final_cols = [c for c in final_cols if c in scada_df.columns]
                         final_scada = scada_df[final_cols]
                         final_scada.to_excel(writer, sheet_name='SCADA_SIGNAL', index=False)
