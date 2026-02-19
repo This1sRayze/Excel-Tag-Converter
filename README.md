@@ -136,7 +136,7 @@ The processed Excel file contains:
 
 ### Area Sheets
 - One sheet per area from your input data
-- Columns: Data Block, Tag Name, UDT Type, Signal Type, Comments, Is Alarm, Origin, Description
+- Columns: Data Block, Tag Name, UDT Type, Signal Type, Comments, Is Alarm, Alarm Priority, Tag History, Origin, Description
 - Color-coded by area
 - Professional formatting with borders and styling
 
