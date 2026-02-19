@@ -284,6 +284,19 @@ class ExcelTagConverter:
                 'base_type': udt_type
             }
     
+    def parse_data_type_array(self, data_type):
+        """Parse data type array like 'ARRAY[0..1] of BOOL' and return (indices, base_type) or (None, data_type)"""
+        array_match = re.match(r'ARRAY\[(\d+)\.\.(\d+)\]\s+of\s+(.+)', str(data_type), re.IGNORECASE)
+        
+        if array_match:
+            array_start = int(array_match.group(1))
+            array_end = int(array_match.group(2))
+            base_type = array_match.group(3).strip().upper()
+            indices = list(range(array_start, array_end + 1))
+            return (indices, base_type)
+        else:
+            return (None, str(data_type).upper() if data_type else '')
+    
     def extract_numeric_indices(self, scada_tag_path):
         """Extract all numeric indices from a scada tag path for proper numeric sorting"""
         indices = re.findall(r'\[(\d+)\]', str(scada_tag_path))
@@ -316,15 +329,10 @@ class ExcelTagConverter:
         data_block_lower = str(data_block).lower().strip()
         area_lower = str(area).lower().strip()
         
-        # Check for CALCULATED type
-        if 'position failure' in desc_lower or area_lower == 'diagnostics':
-            return 'CALCULATED'
-        if 'setpoint' in desc_lower or area_lower == 'diagnostics':
-            return 'CALCULATED'
-        if '_sp' in desc_lower or area_lower == 'diagnostics':
-            return 'CALCULATED'
+        # Check for COMM type FIRST - if COMM is in DB, write COMM in Signal Type
+        if 'comm' in data_block_lower:
+            return 'COMM'
         
-        # Check for COMM type
         comm_keywords_desc = ['deif', 'automaskin', 'mtu', 'consilium','nmea','modbus','gps']
         
         for keyword in comm_keywords_desc:
@@ -339,8 +347,16 @@ class ExcelTagConverter:
             if keyword in udt_lower:
                 return 'COMM'
         
+        # Check for CALCULATED type
+        if 'position failure' in desc_lower or area_lower == 'diagnostics':
+            return 'CALCULATED'
+        if 'setpoint' in desc_lower or area_lower == 'diagnostics':
+            return 'CALCULATED'
+        if '_sp' in desc_lower or area_lower == 'diagnostics':
+            return 'CALCULATED'
+        
         # Check for ANALOG
-        if udt_lower in ['anl', 'anl_tank'] or 'anl' in udt_lower:
+        if udt_lower in ['tank','anl', 'anl_tank','analog','comm_analog','deif_analog'] or 'anl' in udt_lower or 'analog' in udt_lower:
             return 'ANALOG'
         
         # Check for DIGITAL
@@ -495,6 +511,10 @@ class ExcelTagConverter:
                 df_output['Signal Type'] = ''
             if 'Is Alarm' not in df_output.columns:
                 df_output['Is Alarm'] = False
+            if 'Alarm Priority' not in df_output.columns:
+                df_output['Alarm Priority'] = 0
+            if 'Tag History' not in df_output.columns:
+                df_output['Tag History'] = False
             
             # Populate Signal Type for all rows
             for idx, row in df_output.iterrows():
@@ -519,7 +539,7 @@ class ExcelTagConverter:
                         sheet_name = sheet_name.replace(char, '_')
                     
                     # Enforce requested tagged columns order
-                    desired_order = ['Data Block', 'Tag Name', 'UDT Type', 'Signal Type', 'Comments', 'Is Alarm', 'Origin', 'Description']
+                    desired_order = ['Data Block', 'Tag Name', 'UDT Type', 'Signal Type', 'Comments', 'Is Alarm', 'Alarm Priority', 'Tag History', 'Origin', 'Description']
                     cols_present = [c for c in desired_order if c in area_df.columns]
                     if 'Description' in area_df.columns and 'Description' not in cols_present:
                         cols_present.append('Description')
@@ -557,32 +577,24 @@ class ExcelTagConverter:
                             array_type_end = int(array_type_match.group(2))
                             base_type = array_type_match.group(3).strip()
 
-                            # Use the array bounds from the UDT definition
                             indices = list(range(array_type_start, array_type_end + 1))
-                            
                             if base_type in self.data_type_mapping:
                                 signal_types = self.data_type_mapping[base_type]['signals']
                                 signal_type_category = self.get_signal_type_category(base_type, description, data_block, area)
-                                
-                                for signal_type in signal_types:
-                                    for index in indices:
+                                # For each index in the array, output a row for each signal type
+                                for index in indices:
+                                    for signal_type in signal_types:
                                         mapped_data_type = self.data_type_mapping[base_type]['data_types'].get(signal_type, '')
-                                        if mapped_data_type:
-                                            scada_tag_path = f"{data_block}.{tag_name}[{index}].{signal_type}"
-                                            data_type_col = mapped_data_type
+                                        # If mapped_data_type is an array type (e.g., 'ARRAY[0..1] of BOOL'), extract the base type
+                                        array_type_match2 = re.match(r'ARRAY\[\d+\.\.\d+\]\s+of\s+(.+)', mapped_data_type, re.IGNORECASE) if mapped_data_type else None
+                                        if array_type_match2:
+                                            data_type_col = array_type_match2.group(1).strip().upper()
                                         else:
-                                            scada_tag_path = f"{data_block}.{tag_name}[{index}]"
-                                            data_type_col = signal_type
-                                        formatted_signal = self.format_signal_label(signal_type)
-                                        sig_raw = str(signal_type) if signal_type is not None else ''
-                                        is_data_type = bool(re.fullmatch(r'[A-Z0-9]+', sig_raw.replace('_', '')))
-                                        if formatted_signal and not is_data_type and signal_type.upper() != 'STATUS':
-                                            desc_with_signal = f"{description} {formatted_signal}".strip()
-                                        else:
-                                            desc_with_signal = description
-                                        sig_str = str(signal_type) if signal_type is not None else ''
-                                        suffix = str(scada_tag_path).split('.')[-1] if scada_tag_path else ''
-                                        is_alarm = bool(re.search(r'(ALR|ALARM|HIHI|HI|LOLO|LO)', sig_str, re.IGNORECASE)) or bool(re.search(r'(ALR|ALARM|HIHI|HI|LOLO|LO)', str(suffix), re.IGNORECASE))
+                                            data_type_col = mapped_data_type.upper() if mapped_data_type else signal_type.upper()
+                                        # If the data type is BOOL or base type is BOOL, always output BOOL
+                                        if data_type_col == 'BOOL' or signal_type.upper() == 'BOOL':
+                                            data_type_col = 'BOOL'
+                                        scada_tag_path = f"{data_block}.{tag_name}[{index}]"
                                         scada_rows.append({
                                             'Area': area,
                                             'DB': data_block,
@@ -590,10 +602,10 @@ class ExcelTagConverter:
                                             'Type': signal_type,
                                             'Signal Type': signal_type_category,
                                             'Data Type': data_type_col,
-                                            'Description': desc_with_signal,
+                                            'Description': description,
                                             'Comments': (row[comments_col] if comments_present and pd.notna(row[comments_col]) else ''),
                                             'Origin': (row[origin_col] if origin_present and pd.notna(row[origin_col]) else ''),
-                                            'Is Alarm': is_alarm
+                                            'Is Alarm': False
                                         })
                         
                         elif udt_type in self.data_type_mapping:
@@ -638,37 +650,68 @@ class ExcelTagConverter:
                             else:
                                 for signal_type in signal_types:
                                     mapped_data_type = self.data_type_mapping[udt_type]['data_types'].get(signal_type, '')
-                                    if mapped_data_type:
-                                        scada_tag_path = f"{data_block}.{tag_name}.{signal_type}"
-                                        data_type_col = mapped_data_type
+                                    
+                                    # Parse array type in data type (e.g., "ARRAY[0..1] of BOOL")
+                                    data_type_indices, base_data_type = self.parse_data_type_array(mapped_data_type)
+                                    
+                                    if data_type_indices:
+                                        # Data type is an array - create one row per index
+                                        for idx in data_type_indices:
+                                            scada_tag_path = f"{data_block}.{tag_name}.{signal_type}[{idx}]"
+                                            data_type_col = base_data_type
+                                            formatted_signal = self.format_signal_label(signal_type)
+                                            sig_raw = str(signal_type) if signal_type is not None else ''
+                                            is_data_type = bool(re.fullmatch(r'[A-Z0-9]+', sig_raw.replace('_', '')))
+                                            if formatted_signal and not is_data_type and signal_type.upper() != 'STATUS':
+                                                desc_with_signal = f"{description} {formatted_signal}".strip()
+                                            else:
+                                                desc_with_signal = description
+                                            sig_str = str(signal_type) if signal_type is not None else ''
+                                            suffix = str(scada_tag_path).split('.')[-1] if scada_tag_path else ''
+                                            is_alarm = bool(re.search(r'(ALR|ALARM|HIHI|HI|LOLO|LO)', sig_str, re.IGNORECASE)) or bool(re.search(r'(ALR|ALARM|HIHI|HI|LOLO|LO)', str(suffix), re.IGNORECASE))
+                                            scada_rows.append({
+                                                'Area': area,
+                                                'DB': data_block,
+                                                'Scada Tag Path': scada_tag_path,
+                                                'Type': signal_type,
+                                                'Signal Type': signal_type_category,
+                                                'Data Type': data_type_col,
+                                                'Description': desc_with_signal,
+                                                'Comments': (row[comments_col] if comments_present and pd.notna(row[comments_col]) else ''),
+                                                'Origin': (row[origin_col] if origin_present and pd.notna(row[origin_col]) else ''),
+                                                'Is Alarm': is_alarm
+                                            })
                                     else:
-                                        scada_tag_path = f"{data_block}.{tag_name}"
-                                        data_type_col = signal_type
-                                    formatted_signal = self.format_signal_label(signal_type)
-                                    sig_raw = str(signal_type) if signal_type is not None else ''
-                                    is_data_type = bool(re.fullmatch(r'[A-Z0-9]+', sig_raw.replace('_', '')))
-                                    if formatted_signal and not is_data_type and signal_type.upper() != 'STATUS':
-                                        desc_with_signal = f"{description} {formatted_signal}".strip()
-                                    else:
-                                        desc_with_signal = description
-                                    sig_str = str(signal_type) if signal_type is not None else ''
-                                    suffix = str(scada_tag_path).split('.')[-1] if scada_tag_path else ''
-                                    is_alarm = bool(re.search(r'(ALR|ALARM|HIHI|HI|LOLO|LO)', sig_str, re.IGNORECASE)) or bool(re.search(r'(ALR|ALARM|HIHI|HI|LOLO|LO)', str(suffix), re.IGNORECASE))
-                                    scada_rows.append({
-                                        'Area': area,
-                                        'DB': data_block,
-                                        'Scada Tag Path': scada_tag_path,
-                                        'Type': signal_type,
-                                        'Signal Type': signal_type_category,
-                                        'Data Type': data_type_col,
-                                        'Description': desc_with_signal,
-                                        'Comments': (row[comments_col] if comments_present and pd.notna(row[comments_col]) else ''),
-                                        'Origin': (row[origin_col] if origin_present and pd.notna(row[origin_col]) else ''),
-                                        'Is Alarm': is_alarm
-                                    })
+                                        # Regular data type - single row
+                                        if mapped_data_type:
+                                            scada_tag_path = f"{data_block}.{tag_name}.{signal_type}"
+                                            data_type_col = mapped_data_type
+                                        else:
+                                            scada_tag_path = f"{data_block}.{tag_name}"
+                                            data_type_col = signal_type
+                                        formatted_signal = self.format_signal_label(signal_type)
+                                        sig_raw = str(signal_type) if signal_type is not None else ''
+                                        is_data_type = bool(re.fullmatch(r'[A-Z0-9]+', sig_raw.replace('_', '')))
+                                        if formatted_signal and not is_data_type and signal_type.upper() != 'STATUS':
+                                            desc_with_signal = f"{description} {formatted_signal}".strip()
+                                        else:
+                                            desc_with_signal = description
+                                        sig_str = str(signal_type) if signal_type is not None else ''
+                                        suffix = str(scada_tag_path).split('.')[-1] if scada_tag_path else ''
+                                        is_alarm = bool(re.search(r'(ALR|ALARM|HIHI|HI|LOLO|LO)', sig_str, re.IGNORECASE)) or bool(re.search(r'(ALR|ALARM|HIHI|HI|LOLO|LO)', str(suffix), re.IGNORECASE))
+                                        scada_rows.append({
+                                            'Area': area,
+                                            'DB': data_block,
+                                            'Scada Tag Path': scada_tag_path,
+                                            'Type': signal_type,
+                                            'Signal Type': signal_type_category,
+                                            'Data Type': data_type_col,
+                                            'Description': desc_with_signal,
+                                            'Comments': (row[comments_col] if comments_present and pd.notna(row[comments_col]) else ''),
+                                            'Origin': (row[origin_col] if origin_present and pd.notna(row[origin_col]) else ''),
+                                            'Is Alarm': is_alarm
+                                        })
                         
-                        
-                    
                     if scada_rows:
                         scada_df = pd.DataFrame(scada_rows)
                         scada_df['Area'] = scada_df['Area'].astype(str).str.strip()
@@ -699,8 +742,8 @@ class ExcelTagConverter:
                             current_row += area_count
                             area_color_idx += 1
 
-                        # Final SCADA sheet: DB, Scada Tag Path, Data Type, Comments, Origin, Description
-                        final_cols = ['DB', 'Scada Tag Path', 'Data Type', 'Comments', 'Origin', 'Description']
+                        # Final SCADA sheet: Area, DB, Scada Tag Path, Data Type, Comments, Origin, Description
+                        final_cols = ['Area', 'DB', 'Scada Tag Path', 'Data Type', 'Comments', 'Origin', 'Description']
                         final_cols = [c for c in final_cols if c in scada_df.columns]
                         final_scada = scada_df[final_cols]
                         final_scada.to_excel(writer, sheet_name='SCADA_SIGNAL', index=False)
